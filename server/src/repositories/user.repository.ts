@@ -325,4 +325,15 @@ export class UserRepository {
 
     await query.execute();
   }
+
+  async getInSameTrustedGroup(id: string) {
+    return this.db
+      .selectFrom('user')
+      .select('user.id')
+      .where('user.trustedGroupId', '=', (eb) =>
+        eb.selectFrom('user').select('user.trustedGroupId').where('user.id', '=', id),
+      )
+      .execute()
+      .then((result) => result.map(({ id }) => id));
+  }
 }

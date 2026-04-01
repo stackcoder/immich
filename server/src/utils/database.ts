@@ -17,7 +17,8 @@ import { jsonArrayFrom, jsonObjectFrom } from 'kysely/helpers/postgres';
 import { Notice, PostgresError } from 'postgres';
 import { columns, lockableProperties, LockableProperty, Person } from 'src/database';
 import { AssetEditActionItem } from 'src/dtos/editing.dto';
-import { AssetFileType, AssetVisibility, DatabaseExtension } from 'src/enum';
+import { AssetFileType, AssetVisibility, DatabaseExtension, SharingPermission } from 'src/enum';
+import { hasAssetPermissions } from 'src/repositories/asset.repository';
 import { AssetSearchBuilderOptions } from 'src/repositories/search.repository';
 import { DB } from 'src/schema';
 import { AssetExifTable } from 'src/schema/tables/asset-exif.table';
@@ -223,6 +224,30 @@ export function withTags(eb: ExpressionBuilder<DB, 'asset'>) {
   ).as('tags');
 }
 
+export function withPermissions(userId: string) {
+  return (eb: ExpressionBuilder<DB, 'asset'>) =>
+    jsonArrayFrom(
+      eb
+        .selectFrom('album_user')
+        .select((eb) => eb.fn<SharingPermission>('unnest', ['album_user.permissions']).as('permission'))
+        .distinct()
+        .innerJoin('album_asset', 'album_user.albumId', 'album_asset.albumId')
+        .whereRef('album_asset.assetId', '=', 'asset.id')
+        .whereRef('album_user.userId', '=', 'asset.ownerId')
+        .where('album_user.albumId', 'in', (eb) =>
+          eb.selectFrom('album_user').select('album_user.albumId').where('album_user.userId', '=', userId),
+        )
+        .union(
+          eb
+            .selectFrom('partner')
+            .select((eb) => eb.fn<SharingPermission>('unnest', ['partner.permissions']).as('permission'))
+            .distinct()
+            .whereRef('partner.sharedById', '=', 'asset.ownerId')
+            .where('partner.sharedWithId', '=', userId),
+        ),
+    ).as('permissions');
+}
+
 export function truncatedDate<O>() {
   return sql<O>`date_trunc(${sql.lit('MONTH')}, "localDateTime" AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`;
 }
@@ -353,7 +378,7 @@ export function searchAssetBuilder(kysely: Kysely<DB>, options: AssetSearchBuild
     .$if(!!options.checksum, (qb) => qb.where('asset.checksum', '=', options.checksum!))
     .$if(!!options.id, (qb) => qb.where('asset.id', '=', asUuid(options.id!)))
     .$if(!!options.libraryId, (qb) => qb.where('asset.libraryId', '=', asUuid(options.libraryId!)))
-    .$if(!!options.userIds, (qb) => qb.where('asset.ownerId', '=', anyUuid(options.userIds!)))
+    .$if(!!options.userIds, (qb) => qb.where(hasAssetPermissions(options.userIds![0], [SharingPermission.AssetRead])))
     .$if(!!options.encodedVideoPath, (qb) =>
       qb
         .innerJoin('asset_file', (join) =>

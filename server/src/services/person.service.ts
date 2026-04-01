@@ -159,7 +159,7 @@ export class PersonService extends BaseService {
 
   async getStatistics(auth: AuthDto, id: string): Promise<PersonStatisticsResponseDto> {
     await this.requireAccess({ auth, permission: Permission.PersonRead, ids: [id] });
-    return this.personRepository.getStatistics(id);
+    return this.personRepository.getStatistics(auth.user.id, id);
   }
 
   async getThumbnail(auth: AuthDto, id: string): Promise<ImmichFileResponse> {
@@ -537,6 +537,18 @@ export class PersonService extends BaseService {
     if (personId) {
       this.logger.debug(`Assigning face ${id} to person ${personId}`);
       await this.personRepository.reassignFaces({ faceIds: [id], newPersonId: personId });
+
+      const userIds = await this.userRepository.getInSameTrustedGroup(face.asset.ownerId);
+      const peopleToGroup = await this.searchRepository.searchPeople({
+        userIds,
+        embedding: face.faceSearch.embedding,
+        maxDistance: machineLearning.facialRecognition.maxDistance,
+        minBirthDate: new Date(face.asset.fileCreatedAt),
+      });
+      await this.personRepository.mergeIntoGroup(
+        personId,
+        peopleToGroup.map(({ personId }) => personId),
+      );
     }
 
     return JobStatus.Success;
